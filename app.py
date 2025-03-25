@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
-from io import StringIO, BytesIO
+from io import StringIO, BytesIO # StringIO might not be needed anymore for schema
 import time
 import os
 import tempfile
@@ -11,28 +11,23 @@ from pdfminer.high_level import extract_text as extract_text_miner
 from pdfminer.layout import LAParams
 import pytesseract
 from PIL import Image
-# import PyPDF2 # Alternative
 
-# AI Integration - CHANGED
+# AI Integration
 import openai
 
 # Environment variables
 from dotenv import load_dotenv
 
-load_dotenv() # Load variables from .env file
+load_dotenv()
 
 # --- Configuration ---
-# Use st.secrets for deployment, otherwise use environment variables or direct input
-# Configure OpenAI - CHANGED
 try:
-    # Try getting key from Streamlit secrets first (for deployment)
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 except (FileNotFoundError, KeyError):
-    # Fallback to environment variable
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # --- Helper Functions ---
-
+# (extract_text_from_pdf, configure_openai, get_openai_response, validate_and_load_json remain the same)
 @st.cache_data(show_spinner=False)
 def extract_text_from_pdf(uploaded_file):
     """Extracts text from PDF using pdfminer.six, falling back to OCR if needed."""
@@ -53,8 +48,6 @@ def extract_text_from_pdf(uploaded_file):
                 tmp_pdf_path = tmp_pdf.name
 
             st.write("Running OCR (this might take a moment)...")
-            # You might need to install poppler-utils for pdf to image conversion
-            # depending on your pytesseract setup and PDF type.
             extracted_text_ocr = pytesseract.image_to_string(tmp_pdf_path)
             if len(extracted_text_ocr.strip()) > len(extracted_text.strip()):
                  st.write("OCR produced more text.")
@@ -75,18 +68,13 @@ def extract_text_from_pdf(uploaded_file):
 
     return extracted_text
 
-# --- OpenAI Specific Functions --- CHANGED ---
-
 def configure_openai(api_key):
     """Configures the OpenAI client."""
     if not api_key:
-        st.error("OpenAI API key is missing. Please add it via the sidebar or .env file.")
+        # Error display handled in the main UI logic where it's called now
         return False
     try:
         openai.api_key = api_key
-        # Optional: Test connectivity (lightweight call)
-        # openai.models.list()
-        st.sidebar.success("OpenAI API key configured.")
         return True
     except Exception as e:
         st.error(f"Error configuring OpenAI API: {e}")
@@ -96,40 +84,27 @@ def get_openai_response(prompt, model_name="gpt-4o", is_json=False, temperature=
     """Sends prompt to OpenAI ChatCompletion API and gets response."""
     messages = [{"role": "user", "content": prompt}]
     try:
+        response_args = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temperature
+        }
         if is_json:
-             # Instruct the model to produce JSON and use JSON mode if available
              messages = [
                  {"role": "system", "content": "You are a helpful assistant designed to output JSON."},
                  {"role": "user", "content": prompt + "\n\nPlease ensure your entire response is only the valid JSON object or array requested, enclosed in curly braces {} or square brackets [], with no other text before or after."}
              ]
-             # Check if model supports JSON mode (gpt-4o, gpt-4-turbo*, gpt-3.5-turbo-0125+)
+             response_args["messages"] = messages
+             # Check if model supports JSON mode
              json_mode_supported = any(m in model_name for m in ["gpt-4o", "turbo"])
              if json_mode_supported:
-                 response = openai.chat.completions.create(
-                     model=model_name,
-                     messages=messages,
-                     response_format={"type": "json_object"},
-                     temperature=temperature # Lower temp for stricter JSON output
-                 )
-             else: # Fallback for models without explicit JSON mode
-                 response = openai.chat.completions.create(
-                     model=model_name,
-                     messages=messages,
-                     temperature=temperature
-                 )
+                 response_args["response_format"] = {"type": "json_object"}
 
-        else: # Standard text generation
-            response = openai.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=temperature
-            )
-
+        response = openai.chat.completions.create(**response_args)
         response_text = response.choices[0].message.content.strip()
 
         # Manual cleanup as fallback if JSON mode wasn't used or failed
-        if is_json and not json_mode_supported:
-             # Find first '{' or '[' and last '}' or ']'
+        if is_json and not response_args.get("response_format"):
             start = -1
             first_brace = response_text.find('{')
             first_bracket = response_text.find('[')
@@ -148,7 +123,7 @@ def get_openai_response(prompt, model_name="gpt-4o", is_json=False, temperature=
 
             if start != -1 and end != -1:
                 response_text = response_text[start:end]
-            else: # Basic ``` cleanup if boundaries are unclear
+            else:
                  response_text = response_text.replace('```json', '').replace('```', '').strip()
 
         return response_text
@@ -163,11 +138,8 @@ def get_openai_response(prompt, model_name="gpt-4o", is_json=False, temperature=
         st.error(f"OpenAI Connection Error: Could not connect to OpenAI. {e}")
         return None
     except Exception as e:
-        # Catch other potential OpenAI errors or general errors
         st.error(f"OpenAI API call failed: {e}")
         return None
-
-# --- End of OpenAI Specific Functions ---
 
 def validate_and_load_json(json_string):
     """Tries to load a JSON string, returns None on failure."""
@@ -176,9 +148,11 @@ def validate_and_load_json(json_string):
     try:
         return json.loads(json_string)
     except json.JSONDecodeError as e:
-        st.error(f"Failed to parse AI response as JSON: {e}")
-        st.text_area("Invalid JSON received:", json_string, height=150)
+        # Error message displayed where this function is called
+        # st.error(f"Failed to parse AI response as JSON: {e}")
+        # st.text_area("Invalid JSON received:", json_string, height=150)
         return None
+
 
 # --- Streamlit App ---
 
@@ -189,7 +163,7 @@ st.title("📄 Agentic PDF Data Extractor & Analyzer (using OpenAI)")
 with st.sidebar:
     st.header("Configuration")
 
-    # API Key Input - CHANGED
+    # API Key Input
     api_key_input = st.text_input(
         "Enter your OpenAI API Key:",
         type="password",
@@ -197,32 +171,70 @@ with st.sidebar:
         help="Get your key from OpenAI Platform. Uses OPENAI_API_KEY env var if set."
     )
 
-    # Instantiate OpenAI client
-    openai_configured = configure_openai(api_key_input)
+    # Check API Key and Configure OpenAI
+    openai_configured = False
+    if api_key_input:
+        openai_configured = configure_openai(api_key_input)
+        if not openai_configured:
+            st.sidebar.error("Invalid or missing OpenAI API Key.")
+    else:
+        st.sidebar.warning("Please enter your OpenAI API Key.")
+
 
     st.header("Inputs")
     uploaded_pdf = st.file_uploader("1. Upload PDF Document", type="pdf")
-    uploaded_schema = st.file_uploader("2. Upload JSON Schema", type="json")
 
-    # Choose Model - Added
-    openai_model = st.selectbox(
-        "Select OpenAI Model",
-        ("gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"), # Add more models if needed
-        index=0 # Default to gpt-4o
+    # --- CHANGED: Schema Input from Text Area ---
+    schema_input_str = st.text_area(
+        "2. Paste JSON Schema Here",
+        height=250, # Adjust height as needed
+        placeholder='{\n  "field_name_1": "description or type",\n  "field_name_2": "description or type",\n  "nested_object": {\n    "sub_field": "type"\n  },\n  "list_field": ["item_type"]\n}',
+        help="Paste the JSON structure you want to extract data into."
     )
 
+    # Attempt to parse schema immediately to validate syntax for button state
+    schema_dict = None
+    is_schema_valid = False
+    if schema_input_str:
+        try:
+            schema_dict = json.loads(schema_input_str)
+            is_schema_valid = True
+            # You could optionally add a small success indicator here if desired
+            # st.sidebar.caption("✔️ Schema Syntax OK")
+        except json.JSONDecodeError as e:
+            st.sidebar.error(f"Invalid JSON Schema Syntax: {e}")
+            is_schema_valid = False # Ensure flag is False on error
+            schema_dict = None # Ensure dict is None on error
+    # --- END OF SCHEMA CHANGE ---
+
+    # Choose Model
+    openai_model = st.selectbox(
+        "Select OpenAI Model",
+        ("gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"),
+        index=0
+    )
+
+    # --- CHANGED: Button Disabled Logic ---
+    # Enable button only if all inputs and configurations are valid
+    all_inputs_ready = (
+        uploaded_pdf is not None and
+        is_schema_valid and # Check if schema JSON is syntactically valid
+        api_key_input and # Check if key is entered (configuration check happens above)
+        openai_configured # Check if configuration was successful
+    )
     process_button = st.button(
         "Process PDF",
         type="primary",
-        disabled=not (uploaded_pdf and uploaded_schema and api_key_input and openai_configured)
-        )
+        disabled=not all_inputs_ready
+    )
 
     # Placeholder for download button
     download_placeholder = st.empty()
 
 # --- Main Area for Processing and Results ---
 
-# Initialize session state variables
+# Initialize session state variables (if not already done)
+# (Session state initialization code remains the same)
 if 'pdf_text' not in st.session_state: st.session_state.pdf_text = None
 if 'extracted_json_str' not in st.session_state: st.session_state.extracted_json_str = None
 if 'extracted_data' not in st.session_state: st.session_state.extracted_data = None
@@ -231,7 +243,6 @@ if 'dataframe' not in st.session_state: st.session_state.dataframe = None
 if 'analysis_requested' not in st.session_state: st.session_state.analysis_requested = False
 if 'analysis_confirmed' not in st.session_state: st.session_state.analysis_confirmed = False
 if 'analysis_result' not in st.session_state: st.session_state.analysis_result = None
-
 
 # --- Processing Logic ---
 if process_button:
@@ -245,19 +256,15 @@ if process_button:
     st.session_state.analysis_confirmed = False
     st.session_state.analysis_result = None
 
-    # 1. Check AI Configuration (already done in sidebar, re-check just in case)
+    # 1. Configuration checks (already performed for button state, maybe redundant but safe)
     if not openai_configured:
         st.error("OpenAI API Key not configured correctly. Please check the sidebar.")
         st.stop()
+    if not is_schema_valid or not schema_dict:
+        st.error("JSON Schema is invalid or missing. Please check the sidebar.")
+        st.stop() # schema_dict should be valid here because the button required it
 
-    # 2. Load Schema
-    schema_string = StringIO(uploaded_schema.getvalue().decode("utf-8")).read()
-    try:
-        schema_dict = json.loads(schema_string)
-        # st.sidebar.success("JSON schema loaded.") # Already implicitly checked by button enable
-    except json.JSONDecodeError as e:
-        st.error(f"Invalid JSON schema file: {e}")
-        st.stop()
+    # 2. Schema is already loaded into schema_dict from the sidebar logic
 
     # 3. Extract Text from PDF
     with st.spinner("Extracting text from PDF... (OCR might take longer)"):
@@ -269,11 +276,10 @@ if process_button:
             st.error("❌ Failed to extract text from PDF.")
             st.stop()
 
-    # 4. AI Agent: Structured Data Extraction (using OpenAI) - CHANGED
+    # 4. AI Agent: Structured Data Extraction
     if st.session_state.pdf_text:
         with st.spinner(f"🤖 AI Agent 1 ({openai_model}): Extracting structured data..."):
-            # Truncate text if very long to avoid exceeding token limits
-            max_chars = 16000 # Adjust based on model context window and expected schema size
+            max_chars = 16000
             prompt_extract = f"""
             You are an AI assistant tasked with extracting structured data from the following text based on the provided JSON schema.
 
@@ -296,27 +302,30 @@ if process_button:
             5. Ensure the output is a *single, valid JSON object* or a *valid array of JSON objects* if the schema suggests multiple entries.
             6. **Crucially: Your response must contain *only* the JSON data itself, with no surrounding text, comments, or explanations.**
             """
-            # Using lower temperature for more deterministic JSON output
             extracted_json_str = get_openai_response(
                 prompt_extract, model_name=openai_model, is_json=True, temperature=0.1
             )
 
             if extracted_json_str:
                 st.session_state.extracted_json_str = extracted_json_str
-                st.session_state.extracted_data = validate_and_load_json(extracted_json_str)
-                if st.session_state.extracted_data is not None: # Check for successful parsing
-                     st.success(f"✅ AI Agent 1 ({openai_model}): Structured data extracted.")
+                # Validate the JSON received from the AI
+                temp_extracted_data = validate_and_load_json(extracted_json_str)
+                if temp_extracted_data is not None:
+                     st.session_state.extracted_data = temp_extracted_data
+                     st.success(f"✅ AI Agent 1 ({openai_model}): Structured data extracted and parsed.")
                 else:
-                     # Error message already shown by validate_and_load_json
-                     st.error(f"❌ AI Agent 1 ({openai_model}): Failed to get valid JSON response.")
+                     # Validation failed, show error and the raw response
+                     st.error(f"❌ AI Agent 1 ({openai_model}): Failed to parse AI response as valid JSON.")
+                     st.text_area("Invalid JSON received:", extracted_json_str, height=150)
             else:
                 st.error(f"❌ AI Agent 1 ({openai_model}): No response or error during extraction.")
 
-
-    # 5. AI Agent: Verification (using OpenAI) - CHANGED
-    if st.session_state.extracted_data: # Check if extraction was successful
-        with st.spinner(f"🕵️ AI Agent 2 ({openai_model}): Verifying extracted data..."):
-            max_chars_verify = 8000 # Use less context maybe for verification
+    # 5. AI Agent: Verification
+    # (Verification logic remains the same, uses st.session_state.extracted_data if valid)
+    if st.session_state.extracted_data:
+         # ... (verification prompt and call) ...
+         with st.spinner(f"🕵️ AI Agent 2 ({openai_model}): Verifying extracted data..."):
+            max_chars_verify = 8000
             prompt_verify = f"""
             You are an AI verification agent. Review the JSON data supposedly extracted from a source text and check its accuracy against that text.
 
@@ -338,7 +347,6 @@ if process_button:
             4. If everything looks accurate according to the text, state that clearly.
             5. Do NOT output JSON. Provide feedback as plain text.
             """
-            # Slightly higher temperature for more nuanced feedback
             verification_feedback = get_openai_response(
                 prompt_verify, model_name=openai_model, is_json=False, temperature=0.4
             )
@@ -349,8 +357,8 @@ if process_button:
                 st.warning(f"⚠️ AI Agent 2 ({openai_model}): Could not get verification feedback or error occurred.")
 
 
-# --- Display Results --- (No changes needed in this section)
-
+# --- Display Results ---
+# (Display logic remains the same)
 # Display Verification Feedback First
 if st.session_state.verification_feedback:
     st.subheader("🕵️ Verification Agent Feedback")
@@ -368,17 +376,15 @@ if st.session_state.extracted_data is not None:
             data_for_df = [data_for_df]
 
         if isinstance(data_for_df, list) and (not data_for_df or all(isinstance(item, dict) for item in data_for_df)):
-             # Handle empty list case gracefully
              if not data_for_df:
                  st.info("Extracted data is an empty list.")
-                 st.session_state.dataframe = pd.DataFrame() # Create empty DataFrame
+                 st.session_state.dataframe = pd.DataFrame()
              else:
                  df = pd.DataFrame(data_for_df)
                  st.session_state.dataframe = df
                  st.subheader("📋 DataFrame Preview")
                  st.dataframe(df)
 
-             # Prepare CSV for download (works for empty df too)
              csv = st.session_state.dataframe.to_csv(index=False).encode('utf-8')
              with download_placeholder:
                   st.download_button(
@@ -393,36 +399,32 @@ if st.session_state.extracted_data is not None:
 
     except Exception as e:
         st.error(f"Error converting JSON to DataFrame: {e}")
-        st.session_state.dataframe = None # Ensure dataframe is None on error
+        st.session_state.dataframe = None
 
-# --- Optional Analysis Section --- (Only changed Agent 3 call)
-if st.session_state.dataframe is not None: # Check if DataFrame exists
+# --- Optional Analysis Section ---
+# (Analysis logic remains the same)
+if st.session_state.dataframe is not None:
     st.divider()
     st.subheader("🧠 Data Analysis")
 
     analysis_query = st.text_area(
         "Ask a question about the extracted data:",
         key="analysis_query_input",
-        # Use callback to set analysis_requested flag when input changes
         on_change=lambda: setattr(st.session_state, 'analysis_requested', bool(st.session_state.analysis_query_input))
     )
 
-    # Only show confirmation if analysis is requested AND not yet confirmed
     if st.session_state.analysis_requested and not st.session_state.analysis_confirmed:
         st.warning("**Review the extracted DataFrame above before proceeding.**")
         confirm_analysis = st.button("Yes, Analyze This Data")
         if confirm_analysis:
             st.session_state.analysis_confirmed = True
-            # Clear previous analysis result if re-confirming
             st.session_state.analysis_result = None
-            st.rerun() # Rerun to proceed to analysis step
+            st.rerun()
 
-    # Perform analysis only if confirmed
-    if st.session_state.analysis_confirmed and st.session_state.analysis_result is None: # Prevent re-running analysis on cosmetic reruns
+    if st.session_state.analysis_confirmed and st.session_state.analysis_result is None:
         with st.spinner(f"💭 AI Agent 3 ({openai_model}): Analyzing data..."):
             if not st.session_state.dataframe.empty:
-                 # Convert DataFrame to string format suitable for LLM
-                 max_rows_analysis = 100 # Limit rows sent for analysis
+                 max_rows_analysis = 100
                  df_string = st.session_state.dataframe.head(max_rows_analysis).to_csv(index=False)
                  row_info = f"first {len(st.session_state.dataframe.head(max_rows_analysis))} rows" if len(st.session_state.dataframe) > max_rows_analysis else f"all {len(st.session_state.dataframe)} rows"
 
@@ -444,7 +446,6 @@ if st.session_state.dataframe is not None: # Check if DataFrame exists
                  4. If the data is insufficient or irrelevant to the question, state that clearly.
                  5. Present the analysis in a readable format (e.g., text, bullet points).
                  """
-                 # Use a potentially higher temperature for more creative/insightful analysis
                  analysis_result = get_openai_response(
                      prompt_analyze, model_name=openai_model, is_json=False, temperature=0.5
                  )
@@ -453,14 +454,10 @@ if st.session_state.dataframe is not None: # Check if DataFrame exists
                      st.success(f"✅ AI Agent 3 ({openai_model}): Analysis complete.")
                  else:
                      st.error(f"❌ AI Agent 3 ({openai_model}): Failed to get analysis result or error occurred.")
-                     # Reset confirmation on failure to allow potential retry after fixing issue
-                     # st.session_state.analysis_confirmed = False
             else:
                 st.warning("Cannot perform analysis, the DataFrame is empty.")
-                # Reset confirmation if data is empty
-                st.session_state.analysis_confirmed = False
+                st.session_state.analysis_confirmed = False # Reset confirmation
 
-    # Display analysis result if available
     if st.session_state.analysis_result:
          st.subheader("📈 Analysis Results")
          st.markdown(st.session_state.analysis_result)
