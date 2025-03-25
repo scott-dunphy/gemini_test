@@ -5,4 +5,5 @@ pytesseract
 Pillow
 openai
 mistralai
+mistral
 python-dotenv
