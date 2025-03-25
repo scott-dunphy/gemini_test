@@ -4,5 +4,5 @@ pdfminer.six
 pytesseract
 Pillow
 openai
-mistral
+mistralai
 python-dotenv
